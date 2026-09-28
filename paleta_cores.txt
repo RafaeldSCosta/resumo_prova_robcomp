@@ -1,0 +1,96 @@
+FAIXAS_HSV = {
+    # Vermelho precisa de duas faixas porque fica nas duas
+    # extremidades da escala HSV do OpenCV.
+    'vermelho': [
+        (
+            np.array([0, 100, 60]),
+            np.array([10, 255, 255])
+        ),
+        (
+            np.array([170, 100, 60]),
+            np.array([180, 255, 255])
+        ),
+    ],
+
+    'laranja': [
+        (
+            np.array([11, 100, 80]),
+            np.array([20, 255, 255])
+        ),
+    ],
+
+    'amarelo': [
+        (
+            np.array([21, 100, 100]),
+            np.array([35, 255, 255])
+        ),
+    ],
+
+    'verde': [
+        (
+            np.array([36, 60, 40]),
+            np.array([79, 255, 255])
+        ),
+    ],
+
+    'ciano': [
+        (
+            np.array([80, 60, 50]),
+            np.array([99, 255, 255])
+        ),
+    ],
+
+    'azul': [
+        (
+            np.array([100, 70, 40]),
+            np.array([129, 255, 255])
+        ),
+    ],
+
+    'roxo': [
+        (
+            np.array([130, 60, 40]),
+            np.array([149, 255, 255])
+        ),
+    ],
+
+    'rosa': [
+        (
+            np.array([150, 50, 70]),
+            np.array([169, 255, 255])
+        ),
+    ],
+
+    # Marrom normalmente possui matiz parecido com laranja,
+    # mas possui brilho menor.
+    'marrom': [
+        (
+            np.array([5, 80, 20]),
+            np.array([20, 255, 160])
+        ),
+    ],
+
+    # Branco possui pouca saturação e brilho alto.
+    'branco': [
+        (
+            np.array([0, 0, 190]),
+            np.array([180, 50, 255])
+        ),
+    ],
+
+    # Cinza possui pouca saturação e brilho intermediário.
+    'cinza': [
+        (
+            np.array([0, 0, 60]),
+            np.array([180, 50, 189])
+        ),
+    ],
+
+    # Preto é definido principalmente pelo brilho baixo.
+    'preto': [
+        (
+            np.array([0, 0, 0]),
+            np.array([180, 255, 59])
+        ),
+    ],
+}

@@ -1,0 +1,38 @@
+<?xml version="1.0"?>
+<?xml-model
+  href="http://download.ros.org/schema/package_format3.xsd"
+  schematypens="http://www.w3.org/2001/XMLSchema"?>
+
+<package format="3">
+  <name>robo_comandado</name>
+
+  <version>0.0.0</version>
+
+  <description>
+    Robô simulado controlado por comandos recebidos por tópico.
+  </description>
+
+  <maintainer email="SEU_EMAIL">SEU_NOME</maintainer>
+
+  <license>MIT</license>
+
+  <buildtool_depend>ament_python</buildtool_depend>
+
+  <!-- Biblioteca principal da ROS 2 para Python. -->
+  <exec_depend>rclpy</exec_depend>
+
+  <!-- Utilizada nas mensagens de comando e status. -->
+  <exec_depend>std_msgs</exec_depend>
+
+  <!-- Utilizada pela mensagem Twist publicada em /cmd_vel. -->
+  <exec_depend>geometry_msgs</exec_depend>
+
+  <test_depend>ament_copyright</test_depend>
+  <test_depend>ament_flake8</test_depend>
+  <test_depend>ament_pep257</test_depend>
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>
