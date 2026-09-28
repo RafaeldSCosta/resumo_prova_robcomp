@@ -1,0 +1,696 @@
+#!/usr/bin/env python3
+
+import argparse
+from pathlib import Path
+
+import cv2
+import numpy as np
+
+
+# =============================================================
+# CONFIGURAÇÕES
+# =============================================================
+
+CAMINHO_PADRAO = 'imagens/entrada.png'
+CORES_PADRAO = ['vermelho']
+
+AREA_MINIMA_PADRAO = 500.0
+TAMANHO_KERNEL = 5
+
+
+# =============================================================
+# FAIXAS HSV
+# =============================================================
+
+FAIXAS_HSV = {
+    'vermelho': [
+        (
+            np.array([0, 100, 60]),
+            np.array([10, 255, 255])
+        ),
+        (
+            np.array([170, 100, 60]),
+            np.array([180, 255, 255])
+        ),
+    ],
+
+    'laranja': [
+        (
+            np.array([11, 100, 80]),
+            np.array([20, 255, 255])
+        ),
+    ],
+
+    'amarelo': [
+        (
+            np.array([21, 100, 100]),
+            np.array([35, 255, 255])
+        ),
+    ],
+
+    'verde': [
+        (
+            np.array([36, 60, 40]),
+            np.array([79, 255, 255])
+        ),
+    ],
+
+    'ciano': [
+        (
+            np.array([80, 60, 50]),
+            np.array([99, 255, 255])
+        ),
+    ],
+
+    'azul': [
+        (
+            np.array([100, 70, 40]),
+            np.array([129, 255, 255])
+        ),
+    ],
+
+    'roxo': [
+        (
+            np.array([130, 60, 40]),
+            np.array([149, 255, 255])
+        ),
+    ],
+
+    'rosa': [
+        (
+            np.array([150, 50, 70]),
+            np.array([169, 255, 255])
+        ),
+    ],
+
+    'marrom': [
+        (
+            np.array([5, 80, 20]),
+            np.array([20, 255, 160])
+        ),
+    ],
+
+    'branco': [
+        (
+            np.array([0, 0, 190]),
+            np.array([180, 50, 255])
+        ),
+    ],
+
+    'cinza': [
+        (
+            np.array([0, 0, 60]),
+            np.array([180, 50, 189])
+        ),
+    ],
+
+    'preto': [
+        (
+            np.array([0, 0, 0]),
+            np.array([180, 255, 59])
+        ),
+    ],
+}
+
+
+# Cores usadas apenas para desenhar os resultados.
+# OpenCV utiliza BGR.
+CORES_DESENHO = {
+    'vermelho': (0, 0, 255),
+    'laranja': (0, 128, 255),
+    'amarelo': (0, 255, 255),
+    'verde': (0, 200, 0),
+    'ciano': (255, 255, 0),
+    'azul': (255, 0, 0),
+    'roxo': (180, 0, 180),
+    'rosa': (203, 192, 255),
+    'marrom': (42, 42, 165),
+    'branco': (255, 255, 255),
+    'cinza': (128, 128, 128),
+    'preto': (30, 30, 30),
+}
+
+
+class MostrarApenasCorEscolhida:
+    """
+    USE QUANDO O PROFESSOR PEDIR:
+
+    - criar uma máscara;
+    - selecionar uma ou mais cores;
+    - mostrar somente os objetos selecionados;
+    - deixar o restante preto ou branco;
+    - identificar e contar os objetos da máscara.
+
+    O método run recebe uma imagem já carregada.
+    """
+
+    def __init__(
+        self,
+        cores=None,
+        area_minima=AREA_MINIMA_PADRAO,
+        fundo='preto'
+    ):
+        if cores is None:
+            cores = CORES_PADRAO
+
+        # Remove cores repetidas mantendo a ordem.
+        self.cores = list(
+            dict.fromkeys(
+                cor.lower() for cor in cores
+            )
+        )
+
+        self.area_minima = float(area_minima)
+        self.fundo = fundo
+
+        for cor in self.cores:
+            if cor not in FAIXAS_HSV:
+                raise ValueError(
+                    f'Cor não cadastrada: {cor}'
+                )
+
+        if self.fundo not in ['preto', 'branco']:
+            raise ValueError(
+                'O fundo deve ser "preto" ou "branco".'
+            )
+
+        self.kernel = np.ones(
+            (TAMANHO_KERNEL, TAMANHO_KERNEL),
+            dtype=np.uint8
+        )
+
+    # =========================================================
+    # CRIAR MÁSCARA DA COR
+    # =========================================================
+
+    def criar_mascara(self, imagem_hsv, cor):
+        """
+        Cria a máscara inicial de uma cor.
+
+        Para vermelho, une automaticamente as duas faixas.
+        """
+
+        mascara_final = np.zeros(
+            imagem_hsv.shape[:2],
+            dtype=np.uint8
+        )
+
+        for limite_inferior, limite_superior in FAIXAS_HSV[cor]:
+            mascara_parcial = cv2.inRange(
+                imagem_hsv,
+                limite_inferior,
+                limite_superior
+            )
+
+            mascara_final = cv2.bitwise_or(
+                mascara_final,
+                mascara_parcial
+            )
+
+        return mascara_final
+
+    # =========================================================
+    # LIMPAR MÁSCARA
+    # =========================================================
+
+    def limpar_mascara(self, mascara):
+        """
+        Remove pontos pequenos e preenche buracos.
+        """
+
+        # Abertura remove pequenos ruídos brancos.
+        mascara = cv2.morphologyEx(
+            mascara,
+            cv2.MORPH_OPEN,
+            self.kernel,
+            iterations=1
+        )
+
+        # Fechamento preenche buracos nos objetos.
+        mascara = cv2.morphologyEx(
+            mascara,
+            cv2.MORPH_CLOSE,
+            self.kernel,
+            iterations=2
+        )
+
+        return mascara
+
+    # =========================================================
+    # IDENTIFICAR OBJETOS
+    # =========================================================
+
+    def encontrar_objetos(self, mascara, cor):
+        """
+        Encontra os contornos válidos e cria uma nova máscara
+        contendo somente os objetos maiores que a área mínima.
+        """
+
+        contornos, _ = cv2.findContours(
+            mascara.copy(),
+            cv2.RETR_EXTERNAL,
+            cv2.CHAIN_APPROX_SIMPLE
+        )
+
+        objetos = []
+
+        # Esta máscara começa completamente preta.
+        mascara_valida = np.zeros_like(
+            mascara
+        )
+
+        for contorno in contornos:
+            area = cv2.contourArea(contorno)
+
+            if area < self.area_minima:
+                continue
+
+            momentos = cv2.moments(contorno)
+
+            if momentos['m00'] != 0:
+                centro_x = int(
+                    momentos['m10'] / momentos['m00']
+                )
+
+                centro_y = int(
+                    momentos['m01'] / momentos['m00']
+                )
+
+            else:
+                x, y, largura, altura = cv2.boundingRect(
+                    contorno
+                )
+
+                centro_x = x + largura // 2
+                centro_y = y + altura // 2
+
+            x, y, largura, altura = cv2.boundingRect(
+                contorno
+            )
+
+            objetos.append({
+                'cor': cor,
+                'area': area,
+                'centro_x': centro_x,
+                'centro_y': centro_y,
+                'x': x,
+                'y': y,
+                'largura': largura,
+                'altura': altura,
+                'contorno': contorno,
+            })
+
+            # Preenche o contorno válido de branco.
+            cv2.drawContours(
+                mascara_valida,
+                [contorno],
+                -1,
+                255,
+                thickness=-1
+            )
+
+        objetos.sort(
+            key=lambda objeto: objeto['centro_x']
+        )
+
+        return objetos, mascara_valida
+
+    # =========================================================
+    # APLICAR MÁSCARA
+    # =========================================================
+
+    def aplicar_mascara(self, imagem, mascara):
+        """
+        Aplica a máscara na imagem original.
+
+        Fundo preto:
+            utiliza bitwise_and.
+
+        Fundo branco:
+            começa com uma imagem branca e copia os pixels válidos.
+        """
+
+        if self.fundo == 'preto':
+            resultado = cv2.bitwise_and(
+                imagem,
+                imagem,
+                mask=mascara
+            )
+
+        else:
+            resultado = np.full_like(
+                imagem,
+                255
+            )
+
+            resultado[mascara > 0] = imagem[
+                mascara > 0
+            ]
+
+        return resultado
+
+    # =========================================================
+    # DESENHAR IDENTIFICAÇÃO
+    # =========================================================
+
+    def desenhar_identificacao(
+        self,
+        imagem_isolada,
+        objetos
+    ):
+        """
+        Desenha contornos, centros, áreas e identificação.
+        """
+
+        resultado = imagem_isolada.copy()
+
+        contadores = {
+            cor: 0
+            for cor in self.cores
+        }
+
+        for objeto in objetos:
+            cor = objeto['cor']
+            cor_desenho = CORES_DESENHO[cor]
+
+            contadores[cor] += 1
+            numero = contadores[cor]
+
+            cv2.drawContours(
+                resultado,
+                [objeto['contorno']],
+                -1,
+                cor_desenho,
+                2
+            )
+
+            cv2.circle(
+                resultado,
+                (
+                    objeto['centro_x'],
+                    objeto['centro_y']
+                ),
+                6,
+                cor_desenho,
+                -1
+            )
+
+            texto = (
+                f'{cor} {numero} | '
+                f'area: {objeto["area"]:.0f}'
+            )
+
+            cv2.putText(
+                resultado,
+                texto,
+                (
+                    objeto['x'],
+                    max(25, objeto['y'] - 10)
+                ),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.50,
+                cor_desenho,
+                2
+            )
+
+        return resultado
+
+    # =========================================================
+    # RUN
+    # =========================================================
+
+    def run(self, imagem):
+        """
+        Retorna:
+
+        1. imagem somente com as cores selecionadas;
+        2. imagem com os objetos identificados;
+        3. dicionário de máscaras;
+        4. máscara combinada;
+        5. lista de objetos encontrados.
+        """
+
+        if imagem is None:
+            raise ValueError(
+                'A imagem recebida é inválida.'
+            )
+
+        imagem_hsv = cv2.cvtColor(
+            imagem,
+            cv2.COLOR_BGR2HSV
+        )
+
+        mascaras = {}
+
+        mascara_combinada = np.zeros(
+            imagem.shape[:2],
+            dtype=np.uint8
+        )
+
+        todos_objetos = []
+
+        for cor in self.cores:
+            # Cria a máscara da cor.
+            mascara = self.criar_mascara(
+                imagem_hsv,
+                cor
+            )
+
+            # Limpa a máscara.
+            mascara = self.limpar_mascara(
+                mascara
+            )
+
+            # Remove da máscara tudo que estiver abaixo
+            # da área mínima.
+            objetos, mascara_valida = self.encontrar_objetos(
+                mascara,
+                cor
+            )
+
+            mascaras[cor] = mascara_valida
+
+            mascara_combinada = cv2.bitwise_or(
+                mascara_combinada,
+                mascara_valida
+            )
+
+            todos_objetos.extend(
+                objetos
+            )
+
+        # Aplica a máscara combinada.
+        imagem_isolada = self.aplicar_mascara(
+            imagem,
+            mascara_combinada
+        )
+
+        # Desenha as identificações.
+        imagem_identificada = self.desenhar_identificacao(
+            imagem_isolada,
+            todos_objetos
+        )
+
+        return (
+            imagem_isolada,
+            imagem_identificada,
+            mascaras,
+            mascara_combinada,
+            todos_objetos
+        )
+
+
+# =============================================================
+# ARGUMENTOS
+# =============================================================
+
+def ler_argumentos():
+    parser = argparse.ArgumentParser(
+        description=(
+            'Mostra somente objetos das cores escolhidas.'
+        )
+    )
+
+    parser.add_argument(
+        'imagem',
+        nargs='?',
+        default=CAMINHO_PADRAO,
+        help='Caminho da imagem.'
+    )
+
+    parser.add_argument(
+        '--cores',
+        nargs='+',
+        default=CORES_PADRAO,
+        choices=list(FAIXAS_HSV.keys()),
+        help='Cores que serão mostradas.'
+    )
+
+    parser.add_argument(
+        '--area-minima',
+        type=float,
+        default=AREA_MINIMA_PADRAO,
+        help='Área mínima dos objetos.'
+    )
+
+    parser.add_argument(
+        '--fundo',
+        choices=['preto', 'branco'],
+        default='preto',
+        help='Cor do fundo do resultado.'
+    )
+
+    parser.add_argument(
+        '--sem-janela',
+        action='store_true',
+        help='Salva sem abrir as janelas.'
+    )
+
+    return parser.parse_args()
+
+
+# =============================================================
+# MAIN
+# =============================================================
+
+def main():
+    argumentos = ler_argumentos()
+
+    caminho_imagem = Path(
+        argumentos.imagem
+    )
+
+    imagem = cv2.imread(
+        str(caminho_imagem)
+    )
+
+    if imagem is None:
+        print(
+            f'ERRO: não foi possível carregar:\n'
+            f'{caminho_imagem}'
+        )
+        return
+
+    try:
+        filtro = MostrarApenasCorEscolhida(
+            cores=argumentos.cores,
+            area_minima=argumentos.area_minima,
+            fundo=argumentos.fundo
+        )
+
+        (
+            imagem_isolada,
+            imagem_identificada,
+            mascaras,
+            mascara_combinada,
+            objetos
+        ) = filtro.run(imagem)
+
+    except ValueError as erro:
+        print(f'ERRO: {erro}')
+        return
+
+    pasta_resultados = Path('resultados')
+    pasta_resultados.mkdir(
+        parents=True,
+        exist_ok=True
+    )
+
+    # Salva as máscaras individuais.
+    for cor, mascara in mascaras.items():
+        cv2.imwrite(
+            str(
+                pasta_resultados
+                / f'mascara_{cor}.png'
+            ),
+            mascara
+        )
+
+    cv2.imwrite(
+        str(
+            pasta_resultados
+            / 'mascara_combinada.png'
+        ),
+        mascara_combinada
+    )
+
+    cv2.imwrite(
+        str(
+            pasta_resultados
+            / 'objetos_isolados.png'
+        ),
+        imagem_isolada
+    )
+
+    cv2.imwrite(
+        str(
+            pasta_resultados
+            / 'objetos_identificados.png'
+        ),
+        imagem_identificada
+    )
+
+    print('==========================================')
+    print('OBJETOS IDENTIFICADOS')
+    print('==========================================')
+
+    for cor in argumentos.cores:
+        objetos_da_cor = [
+            objeto
+            for objeto in objetos
+            if objeto['cor'] == cor
+        ]
+
+        print(
+            f'{cor}: {len(objetos_da_cor)} objetos'
+        )
+
+        for numero, objeto in enumerate(
+            objetos_da_cor,
+            start=1
+        ):
+            print(
+                f'  Objeto {numero}: '
+                f'área={objeto["area"]:.2f}, '
+                f'centro=({objeto["centro_x"]}, '
+                f'{objeto["centro_y"]})'
+            )
+
+    print('==========================================')
+    print(
+        f'Total de objetos: {len(objetos)}'
+    )
+    print(
+        'Resultado salvo em: '
+        'resultados/objetos_isolados.png'
+    )
+
+    if not argumentos.sem_janela:
+        cv2.imshow(
+            'Imagem original',
+            imagem
+        )
+
+        cv2.imshow(
+            'Mascara combinada',
+            mascara_combinada
+        )
+
+        cv2.imshow(
+            'Somente cores escolhidas',
+            imagem_isolada
+        )
+
+        cv2.imshow(
+            'Objetos identificados',
+            imagem_identificada
+        )
+
+        print('Pressione qualquer tecla para fechar.')
+
+        cv2.waitKey(0)
+        cv2.destroyAllWindows()
+
+
+if __name__ == '__main__':
+    main()

@@ -1,0 +1,890 @@
+#!/usr/bin/env python3
+
+import argparse
+import csv
+from pathlib import Path
+
+import cv2
+import numpy as np
+
+
+# =============================================================
+# CONFIGURAÇÕES
+# =============================================================
+
+CAMINHO_PADRAO = 'imagens/entrada.png'
+
+CORES_PADRAO = [
+    'vermelho',
+    'azul',
+    'amarelo',
+    'verde',
+]
+
+AREA_MINIMA_PADRAO = 500.0
+TAMANHO_KERNEL = 5
+
+
+# =============================================================
+# FAIXAS HSV
+# =============================================================
+
+FAIXAS_HSV = {
+    'vermelho': [
+        (
+            np.array([0, 100, 60]),
+            np.array([10, 255, 255])
+        ),
+        (
+            np.array([170, 100, 60]),
+            np.array([180, 255, 255])
+        ),
+    ],
+
+    'laranja': [
+        (
+            np.array([11, 100, 80]),
+            np.array([20, 255, 255])
+        ),
+    ],
+
+    'amarelo': [
+        (
+            np.array([21, 100, 100]),
+            np.array([35, 255, 255])
+        ),
+    ],
+
+    'verde': [
+        (
+            np.array([36, 60, 40]),
+            np.array([79, 255, 255])
+        ),
+    ],
+
+    'ciano': [
+        (
+            np.array([80, 60, 50]),
+            np.array([99, 255, 255])
+        ),
+    ],
+
+    'azul': [
+        (
+            np.array([100, 70, 40]),
+            np.array([129, 255, 255])
+        ),
+    ],
+
+    'roxo': [
+        (
+            np.array([130, 60, 40]),
+            np.array([149, 255, 255])
+        ),
+    ],
+
+    'rosa': [
+        (
+            np.array([150, 50, 70]),
+            np.array([169, 255, 255])
+        ),
+    ],
+
+    'marrom': [
+        (
+            np.array([5, 80, 20]),
+            np.array([20, 255, 160])
+        ),
+    ],
+
+    'branco': [
+        (
+            np.array([0, 0, 190]),
+            np.array([180, 50, 255])
+        ),
+    ],
+
+    'cinza': [
+        (
+            np.array([0, 0, 60]),
+            np.array([180, 50, 189])
+        ),
+    ],
+
+    'preto': [
+        (
+            np.array([0, 0, 0]),
+            np.array([180, 255, 59])
+        ),
+    ],
+}
+
+
+# Cores utilizadas somente para desenhar.
+# OpenCV utiliza BGR.
+CORES_DESENHO = {
+    'vermelho': (0, 0, 255),
+    'laranja': (0, 128, 255),
+    'amarelo': (0, 255, 255),
+    'verde': (0, 200, 0),
+    'ciano': (255, 255, 0),
+    'azul': (255, 0, 0),
+    'roxo': (180, 0, 180),
+    'rosa': (203, 192, 255),
+    'marrom': (42, 42, 165),
+    'branco': (255, 255, 255),
+    'cinza': (128, 128, 128),
+    'preto': (30, 30, 30),
+}
+
+
+class AnalisadorObjetosPorCor:
+    """
+    USE QUANDO O PROFESSOR PEDIR:
+
+    - contar objetos por cor;
+    - medir área e centro;
+    - encontrar o maior objeto;
+    - encontrar a cor dominante;
+    - comparar cores;
+    - criar máscaras para diferentes cores.
+
+    O método run recebe a imagem já carregada.
+    """
+
+    def __init__(
+        self,
+        cores=None,
+        area_minima=AREA_MINIMA_PADRAO
+    ):
+        if cores is None:
+            cores = CORES_PADRAO
+
+        # Remove nomes repetidos, mas mantém a ordem.
+        self.cores = list(
+            dict.fromkeys(
+                cor.lower() for cor in cores
+            )
+        )
+
+        self.area_minima = float(area_minima)
+
+        for cor in self.cores:
+            if cor not in FAIXAS_HSV:
+                raise ValueError(
+                    f'Cor não cadastrada: {cor}'
+                )
+
+        self.kernel = np.ones(
+            (TAMANHO_KERNEL, TAMANHO_KERNEL),
+            dtype=np.uint8
+        )
+
+    # =========================================================
+    # MÁSCARAS
+    # =========================================================
+
+    def criar_mascara(self, imagem_hsv, cor):
+        """
+        Cria uma máscara binária para uma cor.
+        """
+
+        mascara_final = np.zeros(
+            imagem_hsv.shape[:2],
+            dtype=np.uint8
+        )
+
+        for limite_inferior, limite_superior in FAIXAS_HSV[cor]:
+            mascara_parcial = cv2.inRange(
+                imagem_hsv,
+                limite_inferior,
+                limite_superior
+            )
+
+            mascara_final = cv2.bitwise_or(
+                mascara_final,
+                mascara_parcial
+            )
+
+        return mascara_final
+
+    def limpar_mascara(self, mascara):
+        """
+        Remove pontos pequenos e preenche pequenos buracos.
+        """
+
+        mascara = cv2.morphologyEx(
+            mascara,
+            cv2.MORPH_OPEN,
+            self.kernel,
+            iterations=1
+        )
+
+        mascara = cv2.morphologyEx(
+            mascara,
+            cv2.MORPH_CLOSE,
+            self.kernel,
+            iterations=2
+        )
+
+        return mascara
+
+    # =========================================================
+    # ENCONTRAR E MEDIR OBJETOS
+    # =========================================================
+
+    def encontrar_objetos(self, mascara, cor):
+        """
+        Encontra os objetos de uma determinada cor.
+        """
+
+        contornos, _ = cv2.findContours(
+            mascara.copy(),
+            cv2.RETR_EXTERNAL,
+            cv2.CHAIN_APPROX_SIMPLE
+        )
+
+        objetos = []
+
+        for contorno in contornos:
+            area = cv2.contourArea(contorno)
+
+            if area < self.area_minima:
+                continue
+
+            momentos = cv2.moments(contorno)
+
+            if momentos['m00'] != 0:
+                centro_x = int(
+                    momentos['m10'] / momentos['m00']
+                )
+
+                centro_y = int(
+                    momentos['m01'] / momentos['m00']
+                )
+
+            else:
+                x, y, largura, altura = cv2.boundingRect(
+                    contorno
+                )
+
+                centro_x = x + largura // 2
+                centro_y = y + altura // 2
+
+            x, y, largura, altura = cv2.boundingRect(
+                contorno
+            )
+
+            objetos.append({
+                'cor': cor,
+                'area': area,
+                'centro_x': centro_x,
+                'centro_y': centro_y,
+                'x': x,
+                'y': y,
+                'largura': largura,
+                'altura': altura,
+                'contorno': contorno,
+            })
+
+        # Ordena da esquerda para a direita.
+        objetos.sort(
+            key=lambda objeto: objeto['centro_x']
+        )
+
+        return objetos
+
+    # =========================================================
+    # RESUMO POR COR
+    # =========================================================
+
+    def criar_resumo(self, objetos):
+        """
+        Calcula quantidade, área total e maior objeto de cada cor.
+        """
+
+        resumo = {}
+
+        for cor in self.cores:
+            objetos_da_cor = [
+                objeto
+                for objeto in objetos
+                if objeto['cor'] == cor
+            ]
+
+            quantidade = len(objetos_da_cor)
+
+            area_total = sum(
+                objeto['area']
+                for objeto in objetos_da_cor
+            )
+
+            if objetos_da_cor:
+                maior_da_cor = max(
+                    objetos_da_cor,
+                    key=lambda objeto: objeto['area']
+                )
+            else:
+                maior_da_cor = None
+
+            resumo[cor] = {
+                'quantidade': quantidade,
+                'area_total': area_total,
+                'maior_objeto': maior_da_cor,
+            }
+
+        return resumo
+
+    # =========================================================
+    # DESENHAR
+    # =========================================================
+
+    def desenhar_objetos(self, imagem, objetos):
+        """
+        Desenha todos os objetos encontrados.
+        """
+
+        resultado = imagem.copy()
+
+        contadores = {
+            cor: 0
+            for cor in self.cores
+        }
+
+        for objeto in objetos:
+            cor = objeto['cor']
+            cor_desenho = CORES_DESENHO[cor]
+
+            contadores[cor] += 1
+            numero = contadores[cor]
+
+            cv2.drawContours(
+                resultado,
+                [objeto['contorno']],
+                -1,
+                cor_desenho,
+                2
+            )
+
+            cv2.circle(
+                resultado,
+                (
+                    objeto['centro_x'],
+                    objeto['centro_y']
+                ),
+                5,
+                cor_desenho,
+                -1
+            )
+
+            texto = (
+                f'{cor} {numero}: '
+                f'{objeto["area"]:.0f}'
+            )
+
+            cv2.putText(
+                resultado,
+                texto,
+                (
+                    objeto['x'],
+                    max(20, objeto['y'] - 8)
+                ),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.45,
+                cor_desenho,
+                2
+            )
+
+        return resultado
+
+    def destacar_maior_objeto(
+        self,
+        resultado,
+        maior_objeto
+    ):
+        """
+        Destaca o maior objeto individual da imagem.
+        """
+
+        x = maior_objeto['x']
+        y = maior_objeto['y']
+
+        largura = maior_objeto['largura']
+        altura = maior_objeto['altura']
+
+        cv2.drawContours(
+            resultado,
+            [maior_objeto['contorno']],
+            -1,
+            (0, 255, 0),
+            5
+        )
+
+        cv2.rectangle(
+            resultado,
+            (x, y),
+            (x + largura, y + altura),
+            (255, 255, 255),
+            3
+        )
+
+        cv2.putText(
+            resultado,
+            'MAIOR OBJETO',
+            (x, max(30, y - 30)),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.70,
+            (0, 255, 0),
+            2
+        )
+
+        return resultado
+
+    def desenhar_resumo(
+        self,
+        resultado,
+        resumo,
+        cor_dominante
+    ):
+        """
+        Escreve quantidade e área total de cada cor.
+        """
+
+        altura_caixa = 75 + 27 * len(self.cores)
+
+        cv2.rectangle(
+            resultado,
+            (10, 10),
+            (470, altura_caixa),
+            (0, 0, 0),
+            -1
+        )
+
+        cv2.putText(
+            resultado,
+            f'Cor dominante: {cor_dominante}',
+            (20, 40),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.70,
+            (0, 255, 255),
+            2
+        )
+
+        y_texto = 70
+
+        for cor in self.cores:
+            quantidade = resumo[cor]['quantidade']
+            area_total = resumo[cor]['area_total']
+
+            texto = (
+                f'{cor}: {quantidade} objetos | '
+                f'area total: {area_total:.0f}'
+            )
+
+            cv2.putText(
+                resultado,
+                texto,
+                (20, y_texto),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.50,
+                CORES_DESENHO[cor],
+                2
+            )
+
+            y_texto += 27
+
+        return resultado
+
+    # =========================================================
+    # RUN
+    # =========================================================
+
+    def run(self, imagem):
+        """
+        Retorna:
+
+        1. imagem final;
+        2. dicionário de máscaras;
+        3. máscara combinada;
+        4. lista de objetos;
+        5. resumo por cor;
+        6. maior objeto;
+        7. cor dominante.
+        """
+
+        if imagem is None:
+            raise ValueError('A imagem recebida é inválida.')
+
+        imagem_hsv = cv2.cvtColor(
+            imagem,
+            cv2.COLOR_BGR2HSV
+        )
+
+        mascaras = {}
+
+        mascara_combinada = np.zeros(
+            imagem.shape[:2],
+            dtype=np.uint8
+        )
+
+        todos_objetos = []
+
+        for cor in self.cores:
+            mascara = self.criar_mascara(
+                imagem_hsv,
+                cor
+            )
+
+            mascara = self.limpar_mascara(
+                mascara
+            )
+
+            mascaras[cor] = mascara
+
+            mascara_combinada = cv2.bitwise_or(
+                mascara_combinada,
+                mascara
+            )
+
+            objetos_da_cor = self.encontrar_objetos(
+                mascara,
+                cor
+            )
+
+            todos_objetos.extend(
+                objetos_da_cor
+            )
+
+        if not todos_objetos:
+            raise ValueError(
+                'Nenhum objeto válido foi encontrado.'
+            )
+
+        resumo = self.criar_resumo(
+            todos_objetos
+        )
+
+        maior_objeto = max(
+            todos_objetos,
+            key=lambda objeto: objeto['area']
+        )
+
+        # Compara a soma das áreas de cada cor.
+        cor_dominante = max(
+            self.cores,
+            key=lambda cor: resumo[cor]['area_total']
+        )
+
+        resultado = self.desenhar_objetos(
+            imagem,
+            todos_objetos
+        )
+
+        resultado = self.destacar_maior_objeto(
+            resultado,
+            maior_objeto
+        )
+
+        resultado = self.desenhar_resumo(
+            resultado,
+            resumo,
+            cor_dominante
+        )
+
+        return (
+            resultado,
+            mascaras,
+            mascara_combinada,
+            todos_objetos,
+            resumo,
+            maior_objeto,
+            cor_dominante
+        )
+
+
+# =============================================================
+# SALVAR CSV DOS OBJETOS
+# =============================================================
+
+def salvar_objetos_csv(objetos, caminho):
+    campos = [
+        'cor',
+        'area',
+        'centro_x',
+        'centro_y',
+        'x',
+        'y',
+        'largura',
+        'altura',
+    ]
+
+    with open(
+        caminho,
+        mode='w',
+        newline='',
+        encoding='utf-8'
+    ) as arquivo:
+        escritor = csv.DictWriter(
+            arquivo,
+            fieldnames=campos
+        )
+
+        escritor.writeheader()
+
+        for objeto in objetos:
+            escritor.writerow({
+                'cor': objeto['cor'],
+                'area': round(objeto['area'], 2),
+                'centro_x': objeto['centro_x'],
+                'centro_y': objeto['centro_y'],
+                'x': objeto['x'],
+                'y': objeto['y'],
+                'largura': objeto['largura'],
+                'altura': objeto['altura'],
+            })
+
+
+# =============================================================
+# SALVAR CSV DO RESUMO
+# =============================================================
+
+def salvar_resumo_csv(resumo, caminho):
+    campos = [
+        'cor',
+        'quantidade',
+        'area_total',
+        'maior_area',
+        'centro_maior_x',
+        'centro_maior_y',
+    ]
+
+    with open(
+        caminho,
+        mode='w',
+        newline='',
+        encoding='utf-8'
+    ) as arquivo:
+        escritor = csv.DictWriter(
+            arquivo,
+            fieldnames=campos
+        )
+
+        escritor.writeheader()
+
+        for cor, dados in resumo.items():
+            maior = dados['maior_objeto']
+
+            if maior is None:
+                maior_area = 0
+                centro_x = ''
+                centro_y = ''
+
+            else:
+                maior_area = maior['area']
+                centro_x = maior['centro_x']
+                centro_y = maior['centro_y']
+
+            escritor.writerow({
+                'cor': cor,
+                'quantidade': dados['quantidade'],
+                'area_total': round(
+                    dados['area_total'],
+                    2
+                ),
+                'maior_area': round(
+                    maior_area,
+                    2
+                ),
+                'centro_maior_x': centro_x,
+                'centro_maior_y': centro_y,
+            })
+
+
+# =============================================================
+# ARGUMENTOS
+# =============================================================
+
+def ler_argumentos():
+    parser = argparse.ArgumentParser(
+        description='Analisa objetos de diferentes cores.'
+    )
+
+    parser.add_argument(
+        'imagem',
+        nargs='?',
+        default=CAMINHO_PADRAO,
+        help='Caminho da imagem.'
+    )
+
+    parser.add_argument(
+        '--cores',
+        nargs='+',
+        default=CORES_PADRAO,
+        choices=list(FAIXAS_HSV.keys()),
+        help='Cores que serão analisadas.'
+    )
+
+    parser.add_argument(
+        '--area-minima',
+        type=float,
+        default=AREA_MINIMA_PADRAO,
+        help='Área mínima dos objetos.'
+    )
+
+    parser.add_argument(
+        '--sem-janela',
+        action='store_true',
+        help='Salva sem abrir janelas.'
+    )
+
+    return parser.parse_args()
+
+
+# =============================================================
+# MAIN
+# =============================================================
+
+def main():
+    argumentos = ler_argumentos()
+
+    caminho_imagem = Path(
+        argumentos.imagem
+    )
+
+    imagem = cv2.imread(
+        str(caminho_imagem)
+    )
+
+    if imagem is None:
+        print(
+            f'ERRO: não foi possível carregar:\n'
+            f'{caminho_imagem}'
+        )
+        return
+
+    try:
+        analisador = AnalisadorObjetosPorCor(
+            cores=argumentos.cores,
+            area_minima=argumentos.area_minima
+        )
+
+        (
+            resultado,
+            mascaras,
+            mascara_combinada,
+            objetos,
+            resumo,
+            maior_objeto,
+            cor_dominante
+        ) = analisador.run(imagem)
+
+    except ValueError as erro:
+        print(f'ERRO: {erro}')
+        return
+
+    pasta_resultados = Path('resultados')
+    pasta_resultados.mkdir(
+        parents=True,
+        exist_ok=True
+    )
+
+    # Salva uma máscara para cada cor.
+    for cor, mascara in mascaras.items():
+        caminho_mascara = (
+            pasta_resultados
+            / f'mascara_{cor}.png'
+        )
+
+        cv2.imwrite(
+            str(caminho_mascara),
+            mascara
+        )
+
+    cv2.imwrite(
+        str(
+            pasta_resultados
+            / 'mascara_combinada.png'
+        ),
+        mascara_combinada
+    )
+
+    cv2.imwrite(
+        str(
+            pasta_resultados
+            / 'resultado_completo.png'
+        ),
+        resultado
+    )
+
+    salvar_objetos_csv(
+        objetos,
+        pasta_resultados / 'objetos.csv'
+    )
+
+    salvar_resumo_csv(
+        resumo,
+        pasta_resultados / 'resumo_cores.csv'
+    )
+
+    print('==========================================')
+    print('RESUMO POR COR')
+    print('==========================================')
+
+    for cor in argumentos.cores:
+        dados = resumo[cor]
+
+        print(f'Cor: {cor}')
+        print(f'  Quantidade: {dados["quantidade"]}')
+        print(
+            f'  Área total: '
+            f'{dados["area_total"]:.2f} pixels'
+        )
+
+        if dados['maior_objeto'] is not None:
+            maior = dados['maior_objeto']
+
+            print(
+                f'  Maior objeto: '
+                f'{maior["area"]:.2f} pixels'
+            )
+
+            print(
+                f'  Centro do maior: '
+                f'({maior["centro_x"]}, '
+                f'{maior["centro_y"]})'
+            )
+
+        print('------------------------------------------')
+
+    print('MAIOR OBJETO INDIVIDUAL')
+    print(f'  Cor: {maior_objeto["cor"]}')
+    print(f'  Área: {maior_objeto["area"]:.2f}')
+    print(
+        f'  Centro: '
+        f'({maior_objeto["centro_x"]}, '
+        f'{maior_objeto["centro_y"]})'
+    )
+
+    print('==========================================')
+    print(f'COR DOMINANTE: {cor_dominante}')
+    print('==========================================')
+
+    if not argumentos.sem_janela:
+        cv2.imshow(
+            'Mascara combinada',
+            mascara_combinada
+        )
+
+        cv2.imshow(
+            'Analise completa',
+            resultado
+        )
+
+        print('Pressione qualquer tecla para fechar.')
+
+        cv2.waitKey(0)
+        cv2.destroyAllWindows()
+
+
+if __name__ == '__main__':
+    main()
